@@ -37,6 +37,9 @@ class User(Base):
     is_active = Column(Boolean(), default=True)
     is_superuser = Column(Boolean(), default=False)
     
+    events_count = Column(Integer, default=0)
+    buddies_count = Column(Integer, default=0)
+    
     # Relationships
     organized_events = relationship("Event", back_populates="organizer", cascade="all, delete-orphan")
     participations = relationship("Participation", back_populates="user", cascade="all, delete-orphan")

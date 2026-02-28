@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pathlib import Path
 
 from app.api import deps
@@ -78,14 +78,28 @@ async def read_user_me(
     Get current user with stats.
     """
     from app.models.models import Participation
-    # Count events joined
+
+    # Count events the user has joined
     evt_stmt = select(func.count(Participation.id)).where(Participation.user_id == current_user.id)
     evt_count = await db.execute(evt_stmt)
     current_user.events_count = evt_count.scalar() or 0
-    
-    # buddies_count - for now placeholder or query logic if available
-    current_user.buddies_count = 5 # Placeholder for buddy logic
-    
+
+    # buddies_count: count of distinct other users who attended the same events
+    # build a subquery for all event IDs the current user participated in
+    subq = select(Participation.event_id).where(Participation.user_id == current_user.id).subquery()
+    buddy_stmt = (
+        select(func.count(func.distinct(Participation.user_id)))
+        .where(Participation.event_id.in_(subq))
+        .where(Participation.user_id != current_user.id)
+    )
+    buddy_count = await db.execute(buddy_stmt)
+    current_user.buddies_count = buddy_count.scalar() or 0
+
+    # persist the counters (optional caching/storage)
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+
     return current_user
 
 @router.put("/me", response_model=User)
@@ -120,23 +134,34 @@ async def upload_profile_image(
 ) -> Any:
     """
     Upload a profile image for the current user.
+    Uploaded to: users/{user_id}/profile_picture/{filename}
     """
-    upload_dir = Path("static/profile_images")
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    from app.utils.storage import storage
     
     file_extension = file.filename.split(".")[-1].lower()
     if file_extension not in ["jpg", "jpeg", "png", "webp"]:
         raise HTTPException(status_code=400, detail="Invalid file type. Only JPG/PNG/WEBP allowed.")
     
-    file_name = f"user_{current_user.id}.{file_extension}"
-    file_path = upload_dir / file_name
-    
-    # Async-safe file reading
+    # Read file content
     contents = await file.read()
-    with file_path.open("wb") as buffer:
-        buffer.write(contents)
     
-    image_url = f"/static/profile_images/{file_name}"
+    # Try to upload to Supabase
+    image_url = storage.upload_profile_image(
+        user_id=current_user.id,
+        file_path=file.filename,
+        file_content=contents
+    )
+    
+    # Fallback to local storage if Supabase is not configured
+    if image_url is None:
+        upload_dir = Path("static/profile_images")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"user_{current_user.id}.{file_extension}"
+        file_path = upload_dir / file_name
+        with file_path.open("wb") as buffer:
+            buffer.write(contents)
+        image_url = f"/static/profile_images/{file_name}"
+    
     current_user.profile_image_url = image_url
     
     db.add(current_user)

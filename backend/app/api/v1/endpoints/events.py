@@ -1,7 +1,8 @@
 from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from pathlib import Path
 
 from app.api import deps
 from app.db.session import get_db
@@ -145,3 +146,58 @@ async def delete_event(
     await db.delete(event)
     await db.commit()
     return event
+
+@router.post("/{id}/image", response_model=Event)
+async def upload_event_image(
+    *,
+    db: AsyncSession = Depends(get_db),
+    id: int,
+    file: UploadFile = File(...),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Upload an image for an event.
+    Image uploaded to: events/{event_id}/image_{timestamp}
+    """
+    from app.utils.storage import storage
+    
+    result = await db.execute(select(EventModel).where(EventModel.id == id))
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Only organizer or admins can upload image
+    if not current_user.is_superuser and event.organizer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    file_extension = file.filename.split(".")[-1].lower()
+    if file_extension not in ["jpg", "jpeg", "png", "webp"]:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPG/PNG/WEBP allowed.")
+    
+    # Read file content
+    contents = await file.read()
+    
+    # Try to upload to Supabase
+    image_url = storage.upload_event_image(
+        event_id=event.id,
+        organizer_id=event.organizer_id,
+        file_path=file.filename,
+        file_content=contents
+    )
+    
+    # Fallback to local storage if Supabase is not configured
+    if image_url is None:
+        upload_dir = Path("static/events")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"event_{event.id}.{file_extension}"
+        file_path = upload_dir / file_name
+        with file_path.open("wb") as buffer:
+            buffer.write(contents)
+        image_url = f"/static/events/{file_name}"
+    
+    event.image_url = image_url
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+

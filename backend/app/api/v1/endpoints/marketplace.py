@@ -60,30 +60,57 @@ async def create_item(
     file: UploadFile | None = File(None),
     current_user: UserModel = Depends(deps.get_current_active_user),
 ) -> Any:
-    image_path = None
-    if file:
-        ext = file.filename.split(".")[-1].lower()
-        if ext not in ["jpg", "jpeg", "png", "webp"]:
-            raise HTTPException(status_code=400, detail="Invalid file type. Only JPG/PNG/WEBP allowed.")
-        upload_dir = Path("static/marketplace")
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = f"{current_user.id}_{file.filename}"
-        image_path = f"static/marketplace/{safe_name}"
-        contents = await file.read()
-        with open(image_path, "wb") as buffer:
-            buffer.write(contents)
-            
+    """
+    Create a marketplace item.
+    Image uploaded to: marketplace/{user_id}/items/{item_id}/{filename}
+    """
+    from app.utils.storage import storage
+    
+    # Create item first (without image URL) to get the ID
     db_obj = MIModel(
         owner_id=current_user.id,
         title=title,
         description=description,
         price=price,
         category=category,
-        image_url=image_path.replace("\\", "/") if image_path else None
+        image_url=None
     )
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
+    
+    # Now upload image if provided
+    if file:
+        ext = file.filename.split(".")[-1].lower()
+        if ext not in ["jpg", "jpeg", "png", "webp"]:
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JPG/PNG/WEBP allowed.")
+        
+        contents = await file.read()
+        
+        # Try to upload to Supabase
+        image_url = storage.upload_marketplace_item(
+            user_id=current_user.id,
+            item_id=db_obj.id,
+            file_path=file.filename,
+            file_content=contents
+        )
+        
+        # Fallback to local storage if Supabase is not configured
+        if image_url is None:
+            upload_dir = Path("static/marketplace")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = f"{current_user.id}_{file.filename}"
+            image_path = f"static/marketplace/{safe_name}"
+            with open(image_path, "wb") as buffer:
+                buffer.write(contents)
+            image_url = image_path.replace("\\", "/")
+        
+        # Update item with image URL
+        db_obj.image_url = image_url
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+    
     return db_obj
 
 @router.delete("/{id}")

@@ -33,7 +33,10 @@ async def create_verification_request(
 ) -> Any:
     """
     Submit a new verification request.
+    Document uploaded to: users/{user_id}/verification/{filename}
     """
+    from app.utils.storage import storage
+    
     # Check for existing pending request
     existing = await db.execute(
         select(VRModel).where(VRModel.user_id == current_user.id, VRModel.status == "pending")
@@ -46,18 +49,28 @@ async def create_verification_request(
     if ext not in ["jpg", "jpeg", "png", "pdf"]:
         raise HTTPException(status_code=400, detail="Invalid file type. Only JPG/PNG/PDF allowed.")
 
-    # Save ID Card
-    upload_dir = Path("static/verifications")
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    file_path = upload_dir / f"id_{current_user.id}_{file.filename}"
+    # Read file content
     contents = await file.read()
-    with file_path.open("wb") as buffer:
-        buffer.write(contents)
+    
+    # Try to upload to Supabase
+    id_card_url = storage.upload_verification_document(
+        user_id=current_user.id,
+        file_path=file.filename,
+        file_content=contents
+    )
+    
+    # Fallback to local storage if Supabase is not configured
+    if id_card_url is None:
+        upload_dir = Path("static/verifications")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / f"id_{current_user.id}_{file.filename}"
+        with file_path.open("wb") as buffer:
+            buffer.write(contents)
+        id_card_url = str(file_path).replace("\\", "/")
         
     db_obj = VRModel(
         user_id=current_user.id,
-        id_card_url=str(file_path).replace("\\", "/")
+        id_card_url=id_card_url
     )
     db.add(db_obj)
     await db.commit()

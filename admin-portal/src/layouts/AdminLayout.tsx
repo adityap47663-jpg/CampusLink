@@ -69,7 +69,7 @@ const AdminLayout = () => {
                                 <p className="text-sm font-semibold text-white">{user?.full_name}</p>
                                 <p className="text-xs text-slate-500 capitalize">{user?.is_superuser ? 'Super Admin' : user?.role?.replace('_', ' ') ?? 'Admin'}</p>
                             </div>
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-pink-500 p-0.5">
+                            <div className="w-10 h-10 rounded-full bg-linear-to-tr from-indigo-600 to-pink-500 p-0.5">
                                 <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center font-bold text-sm">
                                     {user?.full_name?.[0]}
                                 </div>
