@@ -33,8 +33,8 @@ class UserInDBBase(UserBase):
 
 # Additional properties to return via API
 class User(UserInDBBase):
-    events_count: int = 0
-    buddies_count: int = 0
+    events_count: Optional[int] = None
+    buddies_count: Optional[int] = None
 
 # Token schemas
 class Token(BaseModel):
